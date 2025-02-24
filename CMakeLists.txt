@@ -35,7 +35,10 @@ pico_sdk_init()
 
 # Add executable. Default name is the project name, version 0.1
 
-add_executable(Projeto_Final_U7LFdP Projeto_Final_U7LFdP.c )
+add_executable(Projeto_Final_U7LFdP 
+    Projeto_Final_U7LFdP.c 
+    Microphone_dma.c
+    inc/ssd1306_i2c.c)
 
 pico_set_program_name(Projeto_Final_U7LFdP "Projeto_Final_U7LFdP")
 pico_set_program_version(Projeto_Final_U7LFdP "0.1")
@@ -71,6 +74,7 @@ target_link_libraries(Projeto_Final_U7LFdP
         hardware_adc
         hardware_timer
         hardware_clocks
+        hardware_pwm
         kissfft
         
         )
