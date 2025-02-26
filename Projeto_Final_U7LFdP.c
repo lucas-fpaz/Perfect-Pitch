@@ -23,6 +23,7 @@
 #define BTN_B 6
 
 #define JOYSTICK_Y 26
+#define ADC_JOYSTICK 0
 
 #define BUZZER_A 10
 #define BUZZER_B 21
@@ -106,9 +107,6 @@ void button_handler(uint gpio, uint32_t events) {
             estado_atual = NOTA;
         }
 
-//        if ((estado_atual == MENU) && debounce(gpio, &last_press_time_a)){
-//            estado_atual = NOTA;
-//        }
     } else if (gpio == BTN_B){
 
         if (((estado_atual == VOZ) || (estado_atual == NOTA)) && debounce(gpio, &last_press_time_b)){
@@ -118,30 +116,60 @@ void button_handler(uint gpio, uint32_t events) {
 }
 
 void lcd_print_nota(int index) {
-    if (index >= 0 && index < num_notas) {
+    static int last_index = -1; // Variável persistente para lembrar a última nota desenhada
+
+    if (index >= 0 && index < num_notas && index != last_index) { // Só atualiza se a nota mudar
         char buffer[32];
-        uint ssd1306_buffer[ssd1306_buffer_length];;
-        
-        // Limpa o display
-        memset(ssd1306_buffer, 0, sizeof(ssd1306_buffer));
-        struct render_area area = {0, 127, 0, 7}; // Define a área do display
+        uint8_t ssd1306_buffer[ssd1306_buffer_length];
+
+        memset(ssd1306_buffer, 0, sizeof(ssd1306_buffer)); // Limpa buffer apenas se necessário
+        struct render_area area = {0, 127, 0, 7}; 
         calculate_render_area_buffer_length(&area);
-        render_on_display(ssd1306_buffer, &area);
-        
+
         // Exibe a oitava
         sprintf(buffer, "%dº oitava", notas[index].oitava);
         ssd1306_draw_string(ssd1306_buffer, 0, 0, buffer);
-        
+
         // Exibe a nota em ambas as notações
         sprintf(buffer, "Nota: %s (%s)", notas[index].nota_br, notas[index].nota_us);
         ssd1306_draw_string(ssd1306_buffer, 0, 20, buffer);
-        
+
         // Exibe a frequência
-        sprintf(buffer, "Frequencia:%d Hz", notas[index].freq);
+        sprintf(buffer, "Frequencia: %d Hz", notas[index].freq);
         ssd1306_draw_string(ssd1306_buffer, 0, 40, buffer);
-        
-        // Atualiza o display
-        render_on_display(ssd1306_buffer, &area);
+
+        render_on_display(ssd1306_buffer, &area); // Renderiza no display
+
+        last_index = index; // Atualiza a última nota desenhada
+    }
+}
+
+void lcd_feedback(int index, uint peak_freq) {
+    static int last_index = -1; // Variável persistente para lembrar a última nota desenhada
+
+    if (peak_freq != last_index) { // Só atualiza se a nota mudar
+        char buffer[32];
+        uint8_t ssd1306_buffer[ssd1306_buffer_length];
+
+        memset(ssd1306_buffer, 0, sizeof(ssd1306_buffer)); // Limpa buffer apenas se necessário
+        struct render_area area = {0, 127, 0, 7}; 
+        calculate_render_area_buffer_length(&area);
+
+        // Exibe a nota em ambas as notações
+        sprintf(buffer, "Nota: %s (%s)", notas[index].nota_br, notas[index].nota_us);
+        ssd1306_draw_string(ssd1306_buffer, 0, 0, buffer);
+
+        // Exibe a frequência
+        sprintf(buffer, "Frequencia: %d Hz", notas[index].freq);
+        ssd1306_draw_string(ssd1306_buffer, 0, 20, buffer);
+
+        // Exibe a frequência detectada
+        sprintf(buffer, "Sua Voz: %d Hz", peak_freq);
+        ssd1306_draw_string(ssd1306_buffer, 0, 40, buffer);
+
+        render_on_display(ssd1306_buffer, &area); // Renderiza no display
+
+        last_index = peak_freq; // Atualiza a última nota desenhada
     }
 }
 
@@ -172,14 +200,32 @@ void play_tone(uint pinA, uint pinB, uint frequency) {
     pwm_set_gpio_level(pinB, 0); // Desliga o som após a duração
     sleep_ms(50); // Pausa entre notas
 }
+/**
+ * @brief Função para controlar o LED RGB com PWM
+ * @param pinA Pino do LED
+ * @param duty_cycle Ciclo de trabalho (0 a 100)
+ */
+void led_pwm(uint pinA, float duty_cycle) {
 
-uint read_Joystick(uint note) {
+    uint slice_numA = pwm_gpio_to_slice_num(pinA);
+    uint32_t clock_freq = clock_get_hz(clk_sys);
+    uint32_t top = clock_freq / 1 - 1;
+
+    pwm_set_wrap(slice_numA, top);
+    pwm_set_gpio_level(pinA, top * (duty_cycle/100)); //duty cycle
+}
+
+uint read_Joystick(int note) {
     static bool joystick_moved = false; // Guarda se já detectamos um movimento
 
     const uint16_t CENTER = 2048;  // Valor médio do ADC (joystick no centro)
-    const uint16_t DEADZONE = 300; // Margem para ignorar pequenas variações
+    const uint16_t DEADZONE = 500; // Margem para ignorar pequenas variações
 
-    adc_select_input(0);  // Canal ADC correspondente ao GPIO26
+    // Pausa temporariamente a coleta de áudio via DMA
+    dma_channel_abort(MIC_CHANNEL);
+
+    // Faz a leitura do ADC do joystick
+    adc_select_input(ADC_JOYSTICK);
 
     uint16_t adc_value = adc_read();  // Lê o valor do ADC (0 a 4095)
 
@@ -199,8 +245,8 @@ uint read_Joystick(uint note) {
     else if (adc_value >= CENTER - DEADZONE && adc_value <= CENTER + DEADZONE) {
         joystick_moved = false;
     }
-
     //printf("Joystick ADC: %d | Nota: %d\n", adc_value, note);
+    sleep_ms(10);
     return note;
 }
 
@@ -220,21 +266,28 @@ void note_feedback(float freq_detectada, int nota_alvo) {
     // Lógica para determinar a cor do LED
     if (diferenca <= 2) {  
         // 💚 Verde: Está na frequência correta (±2Hz)
+        gpio_put(LED_R, 0);
         gpio_put(LED_G, 1);
+        gpio_put(LED_B, 0);
     } 
-    else if (porcentagem_diferenca <= 10) {  
-        // 💛 Amarelo: Diferença menor que 10%
+    else if (diferenca <= 10) {  
+        // 💛 Amarelo: Diferença menor que 10Hz
         gpio_put(LED_R, 1);
         gpio_put(LED_G, 1);
+        gpio_put(LED_B, 0);
     } 
     else if (diferenca <= (notas[nota_alvo + 1].freq - freq_certa) || diferenca <= (freq_certa - notas[nota_alvo - 1].freq)) {  
         // 🟠 Laranja: Está na nota vizinha (acima ou abaixo)
         gpio_put(LED_R, 1);
-        gpio_put(LED_G, 0.5);  // Simula um tom laranja (PWM pode ser usado para ajustar melhor)
+        gpio_put(LED_G, 1);
+        //led_pwm(LED_G, 10);
+        gpio_put(LED_B, 0);
     } 
     else {  
         // 🔴 Vermelho: Muito fora da nota
         gpio_put(LED_R, 1);
+        gpio_put(LED_G, 0);
+        gpio_put(LED_B, 0);
     }
 }
 
@@ -319,9 +372,10 @@ int main()
     uint nota_atual = 0;
     estado_atual = MENU;
     while (true) {
+
         switch(estado_atual){
             case MENU:
-                printf("Menu\n");
+                //printf("Menu\n");
                 gpio_put(LED_R, 0);
                 gpio_put(LED_G, 0);
                 gpio_put(LED_B, 0);
@@ -329,22 +383,22 @@ int main()
                 nota_atual = read_Joystick(nota_atual);
                 break;
             case NOTA:
-                printf("Nota\n");
+                //printf("Nota\n");
                 play_tone(BUZZER_A, BUZZER_B,notas[nota_atual].freq);
                 estado_atual = VOZ;
                 break;
             case VOZ:
-                while(estado_atual == VOZ){
+                // Pausa temporariamente a coleta de áudio via DMA
+                dma_channel_abort(ADC_JOYSTICK);
+                // Faz a leitura do ADC do joystick
+                adc_select_input(MIC_CHANNEL);
                 sample_mic(cfg, adc_buffer, dma_channel);
                 compute_fft(adc_buffer, in, out);
                 float peak_freq = find_peak_frequency(out);
-                printf("Frequência de pico: %.2f Hz\n", peak_freq);
+                //printf("Frequência de pico: %.2f Hz\n", peak_freq);
                 note_feedback(peak_freq, nota_atual);
-                }
+                lcd_feedback(nota_atual, (uint)peak_freq);
                 break;
-                
         }   
     }
 }
-
-

@@ -66,8 +66,8 @@ void sample_mic(dma_channel_config cfg, uint16_t adc_buffer[SAMPLES], int dma_ch
     adc_run(true);
     dma_channel_wait_for_finish_blocking(dma_channel);
     adc_run(false);
-    for (int i = 0; i < SAMPLES; i++) {
-        printf("ADC[%d] = %d\n", i, adc_buffer[i]);
-    }
+    //for (int i = 0; i < SAMPLES; i++) {
+    //    printf("ADC[%d] = %d\n", i, adc_buffer[i]);
+    //}
 }
 
